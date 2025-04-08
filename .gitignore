@@ -1,0 +1,17 @@
+# Jupyter generated files #
+######################
+*checkpoint.ipynb
+*.cpython-313.pyc
+__pycache__
+
+
+# OS generated files #
+######################
+*.DS_Store*
+
+# Virtual environment #
+######################
+venv*
+
+#Personal Files
+HEI*

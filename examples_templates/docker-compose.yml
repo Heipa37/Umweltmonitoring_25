@@ -1,3 +1,4 @@
+name: template
 services:
   timescale:
     image: timescale/timescaledb:latest-pg15

@@ -3,7 +3,7 @@ import datetime as dt
 from datetime import timezone
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import GradientBoostingRegressor
+from xgboost import XGBRegressor
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error
 import time
@@ -50,6 +50,7 @@ def add_lag_features(df: pd.DataFrame, target_col: str = "measurement", lags: in
         pd.DataFrame: DataFrame mit zusätzlichen Lag-Spalten.
     """
     df = df.copy()
+    df = df.sort_values("measurement_time")
     for i in range(1, lags + 1):
         df[f"{target_col}_lag_{i}"] = df[target_col].shift(i)
     return df
@@ -105,6 +106,18 @@ def add_temporal_features(df: pd.DataFrame, time_col: str = "measurement_time") 
     # One-Hot-Encoding
     df = pd.get_dummies(df, columns=["season"], prefix="season")
 
+    # Feature: Zeit seit letzter Messung in Minuten
+    df = df.sort_values("measurement_time")
+    df["minutes_since_last_measurement"] = df["measurement_time"].diff().dt.total_seconds().div(60)
+    df["minutes_since_last_measurement"] = df["minutes_since_last_measurement"].fillna(0)
+
+    return df
+
+
+def add_rolling_features(df, target_col="measurement", window=5):
+    df = df.copy()
+    df[f"{target_col}_roll_mean"] = df[target_col].rolling(window).mean()
+    df[f"{target_col}_roll_std"] = df[target_col].rolling(window).std()
     return df
 
 
@@ -114,7 +127,7 @@ def train_gbdt_timeseries_cv(df: pd.DataFrame,
                               feature_cols: list[str] = None,
                               n_splits: int = 3):
     """
-    Führt zeitreihen-konforme Cross-Validation mit GBDT durch (kein Data Leakage).
+    Führt zeitreihen-konforme Cross-Validation mit GBDT durch.
 
     Args:
         df (pd.DataFrame): Zeitlich sortierter DataFrame mit 'measurement_time', Features und Ziel.
@@ -129,7 +142,8 @@ def train_gbdt_timeseries_cv(df: pd.DataFrame,
     df = df.sort_values("measurement_time")
 
     if feature_cols is None:
-        feature_cols = [col for col in df.columns if col not in [target_col, "measurement_time"]]
+        feature_cols = [col for col in df.columns if col not in [target_col, "measurement_time", "title", "icon", 
+                                                                 "sensor_type", "unit", "sensor_id", "box_id"]]
 
     X = df[feature_cols]
     y = df[target_col]
@@ -146,7 +160,15 @@ def train_gbdt_timeseries_cv(df: pd.DataFrame,
         last_y_test = y_test
         last_test_index = test_index
 
-        model = GradientBoostingRegressor()
+        model = XGBRegressor(n_estimators=300,
+                            learning_rate=0.05,
+                            max_depth=5,
+                            subsample=0.8,
+                            colsample_bytree=0.8,
+                            random_state=42
+                            )
+
+
         model.fit(X_train, y_train)
         y_pred = model.predict(X_test)
         mse = mean_squared_error(y_test, y_pred)
@@ -154,13 +176,13 @@ def train_gbdt_timeseries_cv(df: pd.DataFrame,
         print(f"Fold {fold+1} MSE: {mse:.3f}")
 
     # Modell nochmal auf den vollen Datensatz trainieren 
-    final_model = GradientBoostingRegressor()
+    final_model = XGBRegressor()
     final_model.fit(X, y)
 
-    return final_model, fold_errors, last_X_test, last_y_test, last_test_index, feature_cols
+    return final_model, fold_errors, last_X_test, last_y_test, last_test_index, feature_cols, target_col
 
 
-def detect_anomalies_residuals(model, X_test, y_test, test_index, df, z_thresh: float = 2.5):
+def detect_anomalies_residuals(model, feature_cols, target_col, test_index, df, z_thresh: float = 3):
     """
     Identifiziert Anomalien anhand der Abweichung zwischen Modellvorhersage und tatsächlichem Wert.
 
@@ -174,112 +196,65 @@ def detect_anomalies_residuals(model, X_test, y_test, test_index, df, z_thresh: 
         anomalies_df (pd.DataFrame): Alle Anomalien mit Zeit, Vorhersage, Ist-Wert, Residuum, Z-Score
         residuals_df (pd.DataFrame): Alle Residuen mit Z-Scores
     """
-    test_index = test_index
+    original_cols = ["box_id", "sensor_id", "measurement_time", "measurement", "unit", "sensor_type", "title", "icon"]
+
+    X_test = df[feature_cols]
+    y_test = df[target_col]
     y_pred = model.predict(X_test)
     residuals = y_test - y_pred
-    residuals_mean = residuals.mean()
-    residuals_std = residuals.std()
 
-    z_scores = (residuals - residuals_mean) / residuals_std
-    # Anomalie-Wahrscheinlichkeit (sigmoid)
-    anomaly_probs = 1 / (1 + np.exp(-z_scores.abs()))
+    # Robuster Z-Score mit Median und MAD
+    z_scores = np.abs(residuals / (np.std(residuals) + 1e-6))
 
-    result_df = pd.DataFrame({
-    "measurement_time": df.loc[test_index]["measurement_time"].values, 
-    "actual": y_test.values,
-    "predicted": y_pred,
-    "residual": residuals.values,
-    "z_score": z_scores.values,
-    "anomaly_score": anomaly_probs.values
-})
+    anomaly_score = 1 - np.exp(-z_scores)
 
+
+    result_df = df[original_cols].copy()
+    result_df.loc[y_test.index, "anomaly_score"] = anomaly_score  # anomaly_scores kommt aus detect_anomalies_residuals
+    result_df.loc[y_test.index, "z_score"] = z_scores
+
+    # result_df = pd.DataFrame({
+    #     "measurement_time": df.loc[test_index]["measurement_time"].values,
+    #     "actual": y_test.values,
+    #     "predicted": y_pred,
+    #     "residual": residuals.values,
+    #     "z_score": z_scores.values,
+    #     "anomaly_score": anomaly_score.values
+    # })
 
     anomalies_df = result_df[np.abs(result_df["z_score"]) > z_thresh]
     return anomalies_df, result_df
 
-def loop_forecast_every_5_min():
-    # Setup
-    box_id = "5ea96b86cc50b1001b78fe27"
-    sb = SenseBox(box_id)
-    #dbm = DBManagement(box_id)
-    #! Parquet-Daten
-    # df_train = pd.read_parquet("DF_training_data.parquet")
-    # df_temp = df_train[df_train["title"] == "Temperatur"]
-    # print(df_temp["measurement_time"].head())
-    #! Parquet-Daten Ende
-    # Sensor-ID für Temperatur ermitteln
-    sensor_infos = sb.get_sensor_info()
-    temperature_sensor = next((s for s in sensor_infos if "Temperatur" in s["title"]), None)
-    if not temperature_sensor:
-        raise ValueError("Kein Temperatursensor gefunden.")
-    sensor_id = temperature_sensor["sensor_id"]
-
-    # Einmaliges Modelltraining für festen Zeitraum
-    utc = dt.timezone.utc
-    datetime_from = dt.datetime(2024, 9, 1, tzinfo=utc)
-    datetime_to = dt.datetime(2025, 6, 24, tzinfo=utc)
-
-    df_train = sb.get_sensor_data(sensor_id=sensor_id, datetime_from=datetime_from, datetime_to=datetime_to)
-    df_train = resample_measurements(df_train)
-    df_train = add_lag_features(df_train).dropna()
-    df_train = add_temporal_features(df_train)
-
-    model, _, _, _, _, feature_cols = train_gbdt_timeseries_cv(df_train)  #  feature_cols gespeichert
-    print(" Modelltraining abgeschlossen")
-
-    while True:
-        print("Starte neuen Vorhersage-Durchlauf...")
-
-        now = dt.datetime.now(dt.timezone.utc)
-        past = now - dt.timedelta(minutes=5)
-        df_live = sb.get_sensor_data(sensor_id=sensor_id, datetime_from=past, datetime_to=now)
-
-        df_live = resample_measurements(df_live)
-        df_live = add_lag_features(df_live).dropna()
-        df_live = add_temporal_features(df_live)
-
-        if df_live.empty:
-            print(" Keine neuen Daten gefunden.")
-        else:
-            # Fehlende Features auffüllen
-            for col in feature_cols:
-                if col not in df_live.columns:
-                    df_live[col] = 0
-            X_live = df_live[feature_cols]  # Exakte Reihenfolge
-            y_live = df_live["measurement"]
-            test_index = df_live.index
-
-            anomalies, result_df = detect_anomalies_residuals(
-                model, X_live, y_live, test_index, df_live
-            )
-
-            print(result_df.tail())
-            print(f"Anomalien erkannt: {len(anomalies)}")
-
-            #if not anomalies.empty:
-            #    dbm.write_anomalies_to_db(sensor_id, anomalies)
-
-        print("Warten auf nächsten Lauf in 5 Minuten...")
-        time.sleep(5 * 60)
-
-
-# ---------------------------------------------------------------------------------------------------------------#
-
 
 def main():
+    # Feste Box-ID
     box_id = "5ea96b86cc50b1001b78fe27"
-    df = get_temperature_data(box_id)
+    sb = SenseBox(box_id)
 
-    df_time_blocks = resample_measurements(df)  
-    df_with_lags = add_lag_features(df_time_blocks).dropna()
-    df_with_features = add_temporal_features(df_with_lags)
+    # Trainingsdaten aus Parquet
+    df_train = pd.read_parquet("DF_training_data.parquet")
+    df_temp = df_train[df_train["title"] == "Temperatur"]
 
-    model, errors, x_test, y_test, test_index = train_gbdt_timeseries_cv(df_with_features)
-    anomalies, result_resids = detect_anomalies_residuals(model, x_test, y_test, test_index, df_with_features)
+    # Vorbereitung der Daten
+    df_temp = resample_measurements(df_temp)
+    df_temp = add_rolling_features(df_temp)
+    df_temp = add_lag_features(df_temp).dropna()
+    df_temp = add_temporal_features(df_temp)
+    df_temp["timestamp"] = df_temp["measurement_time"].astype("int64")
 
-    print(result_resids.head())
-    print(anomalies)
+    # Modelltraining
+    model, errors, x_test, y_test, test_index, feature_cols, target_col = train_gbdt_timeseries_cv(df_temp)
+    print("Modelltraining abgeschlossen")
+
+    # Einmalige Anomalie-Erkennung (Testzweck)
+    anomalies, result_df = detect_anomalies_residuals(model, feature_cols, target_col, test_index, df_temp)
+
+    # Ausgabe
+    print(result_df.tail())
+    print(len(result_df))
     print(f"Anzahl erkannter Anomalien: {len(anomalies)}")
+    if not anomalies.empty:
+        print(anomalies)
 
 if __name__ == "__main__":
-    loop_forecast_every_5_min()
+    main()

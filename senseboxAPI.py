@@ -1,6 +1,4 @@
-"""
-SenseBox: API class for sense boxes
-"""
+"""SenseBox: API class for sense boxes"""
 
 import requests
 import pandas as pd
@@ -21,12 +19,15 @@ class SenseBox():
     sb.request_box_info()           #renew manually the box info
     """
     def __init__(self, sensebox_id: str):
+        """Connection to one SenseBox
+        Args:
+            sensebox_id (str): Sensbox Id from https://opensensemap.org"""
         self.sensebox_id: str = sensebox_id
         self.url: str = 'https://api.opensensemap.org'
         self.request_box_info()
 
     def request_box_info(self) -> None:
-        """Updates internaly the box- and sensor Information.
+        """Updates internaly the box- and sensor information.
         """
         response = requests.request(method='get', 
                                     url=f'{self.url}/boxes/{self.sensebox_id}', 
@@ -40,7 +41,7 @@ class SenseBox():
             sensor['lastMeasurement'] = sensor['lastMeasurement']['createdAt']
 
     def get_box_info(self) -> dict:
-        """Returns the basic Informationn about the box:\n
+        """Returns the basic Informationn about the box as dictionary:
         keys = ['box_id', 'createdAt', 'longitude' and 'latitude']
         """
         return_dict = {'box_id': self._box_info['_id'],
@@ -104,8 +105,12 @@ class SenseBox():
     def get_sensor_data(self, sensor_id: str,\
                         datetime_from: dt.datetime=dt.datetime.now(tz=timezone.utc)-dt.timedelta(days=2), \
                         datetime_to: dt.datetime=dt.datetime.now(tz=timezone.utc))-> pd.DataFrame | None:
-        """Returns the measured values from a specific sensor.\n
-        datetime_from and datetime_to  has to be in UTC.
+        """Returns the measured values from a specific sensor.
+        Args: 
+            datetime_from (datetime.datetime): First including datetime
+            datetime_to (datetime.datetime): Last including datetime
+            
+            datetime_from and datetime_to  has to be in UTC (tz=timezone.utc).
         """
         assert datetime_from.tzname() == 'UTC', 'datetime_from has to be utc'
         assert datetime_to.tzname() == 'UTC', 'datetime_to has to be utc'
@@ -119,8 +124,8 @@ class SenseBox():
         else:
             to_date = last_sensor_activity
 
-        from_date = datetime_from  # first possilbe date: sensor initialisation not implemented
-        to_date = datetime_to  # last possible date: last sensor measuremet not implemented
+        from_date = datetime_from  # first possilbe date: sensor initialisation not implemented (movied to dbm)
+        to_date = datetime_to  # last possible date: last sensor measuremet not implemented (moved to dbm)
 
         datapoints_per_day = len( self.__get_sensor_data_batch(sensor_id, \
                                                         dt.datetime.now(tz=timezone.utc) - dt.timedelta(days=1), \
@@ -150,20 +155,3 @@ class SenseBox():
             return data[["measurement_time", "measurement"]]
         else:
             return None
-
-
-
-if __name__ == '__main__':
-    sb = SenseBox(SENSEBOX_ID)
-    #print(sb.get_box_info())
-
-    #print(sb.get_sensor_info()[3]['lastMeasurement'])
-    #print(type(sb.get_sensor_info()[4]['lastMeasurement']))
-    data =  sb.get_sensor_data('6730f1885f78e9000736a078', datetime_from=dt.datetime.now(tz=timezone.utc)-dt.timedelta(days=5))
-    print(data)
-    #print(data.info())
-
-
-
-
-    print('\n')

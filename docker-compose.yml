@@ -11,10 +11,20 @@ services:
     ports:
       - "5432:5432"  # 5433:5432
     volumes:
-      - timescaledb_data:/var/lib/postgresql/data
+      - /var/lib/postgresql/data
     restart: always
     networks:
       - app-network
+
+  app:
+    container_name: SensboxDASH
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    #entrypoint: ["python code/DASH.py"]
+
+    #volumes:
+    #  - /UmApp:/app
 
 networks:
   app-network:

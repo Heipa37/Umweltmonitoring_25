@@ -1,32 +1,23 @@
 import pandas as pd
-import sqlalchemy
 from sqlalchemy import text, create_engine
 from sqlalchemy.exc import SQLAlchemyError
-import os
 import datetime as dt
-from datetime import timezone
-
+#from datetime import timezone
 from senseboxAPI import SenseBox
-
-def check_table_exists(engine, table_name="sensor_data", schema="public"):
-    """Check if table already exists"""
-    with engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_schema = :schema
-                AND table_name = :table_name
-            );
-        """), {"schema": schema, "table_name": table_name})
-        return result.scalar()
 
 
 class DBManagement():
+    """"Managing the Database and request from the sensbox. The DB can save data from multiple senseboxes, 
+    but will write/read for the connected one."""
     def __init__(self, boxId: str):
+        """Managing the Database and request from the connected sensbox with boxId
+        Args:
+            boxId (str): Sensebox ID for the connected"""
         self.boxId: str = boxId
         self.sb = SenseBox(self.boxId)
     
     def db_setup(self, default_ports=True):
+        """"Basic configuration for the DB"""
         engine = create_engine("postgresql://postgres:postgres@localhost:5432/env_monitoring")
         try:
             with engine.begin() as conn:
@@ -49,6 +40,7 @@ class DBManagement():
             print(error)
     
     def db_reset(self):
+        """Resets the database (deleting the table with data)"""
         engine = create_engine("postgresql://postgres:postgres@localhost:5432/env_monitoring")
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE sensor_data;"))
@@ -56,6 +48,11 @@ class DBManagement():
 
 
     def write_new_data(self, datetime_from=None, datetime_to: None | dt.datetime=None,):
+        """Requests all new data from all sensors from the connected sensebox.
+        Args:
+            datetime_from (datetime.datetime): first included datetime. If None, date of box creation is used.
+            datetime_to (datetime.datetime): last included datetime. If None, last date from SenseBox.request_box_info() is used.
+        """
         self.sb.request_box_info()
         sensor_info = self.sb.get_sensor_info()
         for sensor in sensor_info:
@@ -96,9 +93,11 @@ class DBManagement():
             else:
                 print("datetime_from is after then datetime_to")
 
-    def _get_db_sensorIds(self) -> list:
+    def _get_db_sensorIds(self) -> list[str]:
+        """Returns all sensors in the database from the connected sensebox
+        """
         engine = create_engine("postgresql://postgres:postgres@localhost:5432/env_monitoring")
-        query = text(f"SELECT DISTINCT sensor_id FROM sensor_data;")
+        query = text(f"SELECT DISTINCT sensor_id FROM sensor_data where box_id='{self.boxId};")
 
         results = []
         with engine.connect() as connection:
@@ -108,6 +107,11 @@ class DBManagement():
         return results
 
     def _last_saved_measurement_db(self, sensor_id) -> dt.datetime | None:
+        """Returns the most recent timestamp of a given sensor in the database
+        Args:
+            sensor_id (str): SensorID of the Sensor
+            """
+    
         engine = create_engine("postgresql://postgres:postgres@localhost:5432/env_monitoring")
         query = text(f"""SELECT MAX(measurement_time) from sensor_data
                 WHERE sensor_id = '{sensor_id}'
@@ -118,17 +122,9 @@ class DBManagement():
         return max_time
     
     def read_data(self)-> pd.DataFrame:
+        """Reads the data of the connected sensebox from the database
+        """
         engine = create_engine("postgresql://postgres:postgres@localhost:5432/env_monitoring")
         query = f"SELECT * from sensor_data where box_id='{self.boxId}'"
         df = pd.read_sql(query, con=engine)
         return df
-
-
-if __name__ == "__main__":
-    dbm = DBManagement("5ea96b86cc50b1001b78fe27")
-    #dbm.db_setup()
-    dbm.write_new_data(datetime_from=dt.datetime.now(tz=timezone.utc)-dt.timedelta(days=60), datetime_to=dt.datetime.now(tz=timezone.utc)-dt.timedelta(days=30))
-
-
-
-

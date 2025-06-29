@@ -1,22 +1,13 @@
-Projekt setup:
+- start docker desktop
 
--Prequesits:
->>> pip install virtualenv
+- build container:
+$docker compose -f 'docker-compose.yml' up -d --build 
 
--Virtual environement:
-create: python3.xx -m venv my_venv_name
->>> python3.12 -m venv venv_UM25
-activate: source my_venv_name/bin/activate
->>> source venv_UM25/bin/activate
+- start dash:
+python DASH.py
 
-- Modules
-to load from a existing requirements file:
->>> pip install -r requirements.txt
-to crate a new requirements file:
->>> pip freeze > requirements.txt
+- open dash
+http://127.0.0.1:8050/
 
--Gitignore
-create Gitignore:
->>> touch .gitignore
-comments in gitignore start with #
-list all files, you don't want to push
+- past in you sensebox id
+669a877ae3b7f1000824289c

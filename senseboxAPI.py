@@ -7,8 +7,6 @@ import datetime as dt
 from datetime import timezone
 import warnings
 
-SENSEBOX_ID: str = '5ea96b86cc50b1001b78fe27'
-
 class SenseBox():
     """Connection to one SenseBox and allows to get the Information
     about the box, the sensors and the data collected by the sensors.\n
@@ -70,7 +68,7 @@ class SenseBox():
         Maximum time between datetime_from and datetime_to is 30 days. Each has to be in UTC.
         """
         def __sensor_single_batch(sensor_id: str, datetime_from: dt.datetime, datetime_to: dt.datetime, iteration: int=0):
-            print(f"Request batch with iteration: {iteration}")
+            print("\r" + f"Request batch {self.batch_number}/{self.batch_len} with iteration: {iteration}", end="")
             if datetime_from < datetime_to:
                 datetime_from_str: str = datetime_from.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
                 datetime_to_str: str = datetime_to.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
@@ -94,9 +92,12 @@ class SenseBox():
                     new_time_interval = [[datetime_from, datetime_from + new_interval_length], 
                                           [datetime_from + new_interval_length + dt.timedelta(seconds=0.001), datetime_to]]
                     data = __sensor_single_batch(sensor_id, new_time_interval[0][0], new_time_interval[0][1], iteration=iteration+1)
+                    self.batch_number -= 1
                     data += __sensor_single_batch(sensor_id, new_time_interval[1][0], new_time_interval[1][1], iteration+1)
+                    self.batch_number -= 1
             else:
                 data = []
+            self.batch_number += 1
             return data
         
         data = __sensor_single_batch(sensor_id, datetime_from, datetime_to)
@@ -123,31 +124,35 @@ class SenseBox():
             to_date = datetime_to
         else:
             to_date = last_sensor_activity
-
+        self.batch_number = 1
+        self.batch_len = 1
         from_date = datetime_from  # first possilbe date: sensor initialisation not implemented (movied to dbm)
         to_date = datetime_to  # last possible date: last sensor measuremet not implemented (moved to dbm)
+        if to_date - from_date > dt.timedelta(days=1):
+            datapoints_per_day = len( self.__get_sensor_data_batch(sensor_id, \
+                                                            dt.datetime.now(tz=timezone.utc) - dt.timedelta(days=1), \
+                                                            dt.datetime.now(tz=timezone.utc)))
+            if datapoints_per_day == 0:
+                datapoints_per_day = 1
+            days_for_10k_datapoints = 10000 / datapoints_per_day
+            if days_for_10k_datapoints < 30:
+                request_interval_len = dt.timedelta(days=days_for_10k_datapoints * 0.98)
+            else:
+                request_interval_len = dt.timedelta(days=30)
 
-        datapoints_per_day = len( self.__get_sensor_data_batch(sensor_id, \
-                                                        dt.datetime.now(tz=timezone.utc) - dt.timedelta(days=1), \
-                                                        dt.datetime.now(tz=timezone.utc)))
-        if datapoints_per_day == 0:
-            datapoints_per_day = 1
-        days_for_10k_datapoints = 10000 / datapoints_per_day
-        if days_for_10k_datapoints < 30:
-            request_interval_len = dt.timedelta(days=days_for_10k_datapoints * 0.98)
+            time_intervals: list[list[dt.datetime]] = [[from_date, from_date + request_interval_len - dt.timedelta(seconds=0.001)]]
+            while time_intervals[-1][1] < to_date:
+                time_intervals.append([time_intervals[-1][1] + dt.timedelta(seconds=0.001)\
+                                       , time_intervals[-1][1] + request_interval_len + dt.timedelta(seconds=0.001)])
+            time_intervals[-1][1] = to_date
+
+            data = []
+            self.batch_len = len(time_intervals) + 1
+            for interval in time_intervals:
+                data += self.__get_sensor_data_batch(sensor_id, interval[0], interval[1])
         else:
-            request_interval_len = dt.timedelta(days=30)
-        
-        time_intervals: list[list[dt.datetime]] = [[from_date, from_date + request_interval_len - dt.timedelta(seconds=0.001)]]
-        while time_intervals[-1][1] < to_date:
-            time_intervals.append([time_intervals[-1][1] + dt.timedelta(seconds=0.001)\
-                                   , time_intervals[-1][1] + request_interval_len + dt.timedelta(seconds=0.001)])
-        time_intervals[-1][1] = to_date
-
-        data = []
-        for interval in time_intervals:
-            data += self.__get_sensor_data_batch(sensor_id, interval[0], interval[1])
-
+            data = self.__get_sensor_data_batch(sensor_id, from_date, to_date)
+        print('')
         data = pd.DataFrame(data)
         if len(data) > 0:
             data["measurement"] = pd.to_numeric(data["value"], errors="coerce")

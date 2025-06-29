@@ -2,7 +2,7 @@ import pandas as pd
 from sqlalchemy import text, create_engine
 from sqlalchemy.exc import SQLAlchemyError
 import datetime as dt
-from datetime import timezone
+#from datetime import timezone
 from senseboxAPI import SenseBox
 
 

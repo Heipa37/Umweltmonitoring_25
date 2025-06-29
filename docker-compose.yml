@@ -16,15 +16,6 @@ services:
     networks:
       - app-network
 
-  app:
-    container_name: SensboxDASH
-    build:
-      context: .
-      dockerfile: ./Dockerfile
-    #entrypoint: ["python code/DASH.py"]
-
-    #volumes:
-    #  - /UmApp:/app
 
 networks:
   app-network:
